@@ -106,6 +106,15 @@ else
     fi
 fi
 [ -f "$PAYLOAD_DEST/notproton.dylib" ] || die "NotProton's components are incomplete (notproton.dylib missing)."
+# The runner this source tree keeps is the prebuilt one plus macSteam's fixes (the
+# whole-path launch, the OnlineFix scan and its nested search). A fresh checkout has
+# no earlier runner to keep, and the patches below can't add the OnlineFix scan to
+# the prebuilt runner, which has none, so install the source copy.
+SOURCE_RUNNER="$NP_DIR/dylib/feats/compat_run.sh"
+if [ -f "$SOURCE_RUNNER" ]; then
+    cp "$SOURCE_RUNNER" "$PAYLOAD_DEST/run"
+    chmod +x "$PAYLOAD_DEST/run"
+fi
 # The payload folder is ignored in this repository, so the patch is what a fresh
 # checkout has. Applying it to an already-fixed runner is a no-op.
 RUNNER_PATCH="$ROOT/patches/notproton-run-whole-path.patch"
