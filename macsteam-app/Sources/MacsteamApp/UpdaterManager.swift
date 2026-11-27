@@ -3,6 +3,9 @@ import AppKit
 import Combine
 import Sparkle
 
+/// Updates come from the combined macSteam + NotProton feed named by `SUFeedURL` in the
+/// app's Info.plist (build.sh writes it). Each update is checked against `SUPublicEDKey`
+/// before it is installed, because the app itself is only ad-hoc signed.
 @MainActor
 final class UpdaterManager: NSObject, ObservableObject {
     static let shared = UpdaterManager()
@@ -11,9 +14,21 @@ final class UpdaterManager: NSObject, ObservableObject {
 
     @Published var canCheckForUpdates = false
 
+    /// A build without a feed or a key (a `swift run` dev build, or an older build.sh)
+    /// cannot update; starting Sparkle there would only show an error.
+    let isConfigured: Bool = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let feed = (info["SUFeedURL"] as? String) ?? ""
+        let key = (info["SUPublicEDKey"] as? String) ?? ""
+        return !feed.isEmpty && !key.isEmpty
+    }()
+
     var automaticallyChecksForUpdates: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set { controller.updater.automaticallyChecksForUpdates = newValue }
+        get { isConfigured && controller.updater.automaticallyChecksForUpdates }
+        set {
+            guard isConfigured else { return }
+            controller.updater.automaticallyChecksForUpdates = newValue
+        }
     }
 
     private override init() {
@@ -28,16 +43,21 @@ final class UpdaterManager: NSObject, ObservableObject {
             .assign(to: &$canCheckForUpdates)
     }
 
-    // Combined macSteam + NotProton build: automatic updates are switched off on purpose. The
-    // stock macSteam update feed would replace this app with plain macSteam (no NotProton).
-    func start() {}
+    func start() {
+        guard isConfigured else { return }
+        controller.startUpdater()
+    }
 
     func checkForUpdates() {
-        let alert = NSAlert()
-        alert.messageText = "Updates are turned off in this combined build"
-        alert.informativeText = "macSteam and NotProton are built together, so the built-in updater "
-            + "(which only knows about plain macSteam) is disabled. To update, rebuild from newer sources."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        guard isConfigured else {
+            let alert = NSAlert()
+            alert.messageText = "This build can't update itself"
+            alert.informativeText = "It was built without an update feed. Install a macSteam "
+                + "release DMG, or rebuild with ./build.sh, to get automatic updates."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        controller.checkForUpdates(nil)
     }
 }

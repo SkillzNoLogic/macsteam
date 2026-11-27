@@ -169,7 +169,7 @@ say "Building CloudRedirect's cloud runtime"
 
 "$ROOT/scripts/build-onlinefix.sh" "$APP"
 
-# Sparkle (needed to launch; automatic updating is switched off in this build)
+# Sparkle: the updater framework (feed and key are set in Info.plist below)
 if [ -d "$BIN_DIR/Sparkle.framework" ]; then
     ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 else
@@ -179,6 +179,18 @@ else
 fi
 
 NP_APP_VERSION="$(sed -n 's/^#define NOTPROTON_VERSION "\(.*\)"/\1/p' "$NP_DIR/dylib/version.h")"
+# Automatic updates (Sparkle). The feed is the appcast.xml that
+# .github/workflows/mirror-upstream.yml keeps; every update in it is signed with
+# the private key whose public half is below. Override either to point a build
+# at another feed, or set MACSTEAM_FEED_URL="" to build without updates.
+SPARKLE_FEED_URL="${MACSTEAM_FEED_URL-https://raw.githubusercontent.com/SkillzNoLogic/macsteam/main/appcast.xml}"
+SPARKLE_PUBLIC_KEY="${MACSTEAM_SPARKLE_PUBLIC_KEY:-+nMQRgEWAndy7FprSQjv4Ef2iIc/cgDJD5E86hJPwFc=}"
+SPARKLE_PLIST=""
+if [ -n "$SPARKLE_FEED_URL" ]; then
+    SPARKLE_PLIST="<key>SUFeedURL</key> <string>$SPARKLE_FEED_URL</string>
+    <key>SUPublicEDKey</key> <string>$SPARKLE_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key> <true/>"
+fi
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -194,7 +206,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleLocalizations</key>
     <array><string>en</string><string>de</string><string>fr</string><string>it</string><string>zh-Hans</string></array>
     <key>CFBundleShortVersionString</key> <string>$MS_VERSION</string>
-    <key>CFBundleVersion</key>            <string>19</string>
+    <key>CFBundleVersion</key>            <string>$MS_VERSION</string>
+    $SPARKLE_PLIST
     <key>NotProtonVersion</key>           <string>$NP_APP_VERSION</string>
     <key>LSMinimumSystemVersion</key>     <string>26.0</string>
     <key>LSApplicationCategoryType</key>  <string>public.app-category.utilities</string>

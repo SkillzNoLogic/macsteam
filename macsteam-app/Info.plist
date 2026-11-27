@@ -47,8 +47,8 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/Selectively11/macsteam/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/SkillzNoLogic/macsteam/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>rDOXzJ+vt12aWeu9hATgvz6q46MlRcgR4gbTfj5YuWQ=</string>
+	<string>+nMQRgEWAndy7FprSQjv4Ef2iIc/cgDJD5E86hJPwFc=</string>
 </dict>
 </plist>

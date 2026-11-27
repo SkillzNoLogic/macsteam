@@ -1,0 +1,167 @@
+name: Mirror owner releases
+# Keeps this fork's automatic-update feed in step with Falhoo/macsteam.
+#
+# Every 6 hours it looks at the owner's latest release. When this fork has no
+# release with that tag yet, it merges the tag into main, builds the app (which
+# carries this fork's update feed and key), signs the DMG for Sparkle, publishes
+# it as a release here and adds it to appcast.xml. Installed copies pick it up
+# on their next update check.
+#
+# Needs the repository secret SPARKLE_PRIVATE_KEY (the file written by
+# `generate_keys --account macsteam-fork -x <file>`). If the owner's release
+# changes anything under .github/workflows, the push also needs MIRROR_PUSH_TOKEN:
+# a token with the "workflow" scope, since GITHUB_TOKEN may not push those files.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Owner release tag to mirror (blank = their latest)"
+        required: false
+        default: ""
+
+concurrency:
+  group: mirror-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM: Falhoo/macsteam
+
+jobs:
+  check:
+    # Cheap Linux check so the scheduled runs don't spin up a Mac for nothing.
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      needed: ${{ steps.find.outputs.needed }}
+    steps:
+      - name: Find the owner's release
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ inputs.tag }}
+        run: |
+          TAG="${WANTED:-$(gh release view -R "$UPSTREAM" --json tagName -q .tagName)}"
+          [ -n "$TAG" ] || { echo "::error::No release found on $UPSTREAM"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Done means it is in the update feed, not just released: a run that
+          # failed between the two is picked up again on the next schedule.
+          FEED="$(gh api "repos/$GITHUB_REPOSITORY/contents/appcast.xml?ref=main" -H "Accept: application/vnd.github.raw" || true)"
+          if printf '%s' "$FEED" | grep -qF "<sparkle:shortVersionString>${TAG#v}</sparkle:shortVersionString>"; then
+            echo "$TAG is already in the update feed."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG is new; building it."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
+    # Xcode 26 (Swift 6.2) is needed by NotProton's package and build.sh.
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the signing key is set
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          [ -n "$SPARKLE_PRIVATE_KEY" ] || { echo "::error::Add the SPARKLE_PRIVATE_KEY repository secret (see the top of this file)."; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.MIRROR_PUSH_TOKEN || github.token }}
+
+      - name: Merge the owner's release into main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          git fetch --no-tags upstream "refs/tags/$TAG:refs/tags/$TAG"
+          if ! git merge --no-edit -m "Merge $UPSTREAM $TAG" "$TAG"; then
+            git merge --abort || true
+            echo "::error::$TAG does not merge cleanly into main. Merge it by hand (git pull upstream main), push, then re-run this workflow."
+            exit 1
+          fi
+          git submodule update --init --recursive
+
+      - name: Check the version
+        id: version
+        run: |
+          VERSION="$(sed -n 's/^#define MACSTEAM_VERSION "\(.*\)"/\1/p' src/version.h)"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::src/version.h says $VERSION but the release is $TAG; not publishing a mislabelled update."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Steam compatibility tests
+        if: hashFiles('scripts/tests/steam_compat.py') != ''
+        run: python3 scripts/tests/steam_compat.py
+
+      - name: NotProton 1.2.6
+        run: curl -fL --retry 3 -o NotProton.zip https://github.com/NotProtonNot/NotProton/releases/download/v1.2.6/NotProton.zip
+
+      - name: Build the app
+        run: ./build.sh --notproton-app NotProton.zip
+
+      - name: Check the app can update itself
+        run: |
+          PLIST=dist/macSteam.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$PLIST"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" = "${{ steps.version.outputs.version }}"
+
+      - name: Test the packages
+        run: |
+          (cd onlinefix && swift test)
+          (cd macsteam-app && swift test)
+          (cd notproton/app && swift test)
+
+      - name: Package DMG
+        run: |
+          brew install create-dmg
+          ./scripts/make-dmg.sh "macSteam-${{ steps.version.outputs.version }}.dmg"
+
+      - name: Push the merge
+        run: git push origin HEAD:main
+
+      - name: Create the release
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release view "$TAG" -R "$UPSTREAM" --json body -q .body > "$RUNNER_TEMP/notes.md" || true
+          TITLE="$(gh release view "$TAG" -R "$UPSTREAM" --json name -q .name || true)"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "macSteam-$VERSION.dmg" --clobber
+          else
+            gh release create "$TAG" "macSteam-$VERSION.dmg" \
+              --target "$(git rev-parse HEAD)" \
+              --title "${TITLE:-$TAG}" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+
+      - name: Sign and add to the update feed
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          export SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle_key"
+          ( umask 077; printf '%s' "$SPARKLE_PRIVATE_KEY" > "$SPARKLE_KEY_FILE" )
+          ./scripts/appcast-add.sh "macSteam-$VERSION.dmg" "$VERSION" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/macSteam-$VERSION.dmg" \
+            "$RUNNER_TEMP/notes.md"
+          rm -f "$SPARKLE_KEY_FILE"
+          git add appcast.xml
+          git commit -m "Add $TAG to the update feed"
+          git pull --rebase origin main
+          git push origin HEAD:main
