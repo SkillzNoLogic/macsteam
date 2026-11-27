@@ -5,7 +5,8 @@
 // relay, as RV There Yet? does) never gets past "connecting to Steam relay
 // servers" while the game's Steam pipe carries Spacewar's AppID 480, so it has
 // to reach the client as itself — the same thing the LuaTools fixes do by
-// keeping the game's real AppID.
+// keeping the game's real AppID. That choice stays in this file as the entry's
+// keepRealAppID flag: to the dylib, a game missing from here routes as 480.
 //
 // A game whose recorded fix files are gone is left out too: Steam puts the game's
 // own files back on a verify, update or repair, and starting that game as
@@ -35,9 +36,9 @@ enum OnlineFixRoutingFile {
         }
     }
 
-    /// The manager's games minus the ones set to keep their real AppID and the
-    /// ones whose fix is no longer on disk. The entries are copied unchanged so
-    /// every patch flag the dylib reads survives.
+    /// The manager's games minus the ones whose fix is no longer on disk. The
+    /// entries are copied unchanged so every flag the dylib reads survives,
+    /// keepRealAppID included.
     static func routedGames(from file: URL) -> [[String: Any]] {
         guard
             let data = try? Data(contentsOf: file),
@@ -49,8 +50,7 @@ enum OnlineFixRoutingFile {
 
         return games.filter { game in
             guard let id = game["id"] as? Int, id > 0, id != 480 else { return false }
-            if broken.contains(id) { return false }
-            return !(game["keepRealAppID"] as? Bool ?? false)
+            return !broken.contains(id)
         }
     }
 
