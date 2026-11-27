@@ -62,8 +62,9 @@ jobs:
   release:
     needs: check
     if: needs.check.outputs.needed == 'true'
-    # Xcode 26 (Swift 6.2) is needed by NotProton's package and build.sh.
-    runs-on: macos-26
+    # NotProton's app uses SwiftUI API that only the macOS 27 SDK has (Xcode 27),
+    # which GitHub offers on its xcode-27 preview machines; macos-26 stops at Xcode 26.6.
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       TAG: ${{ needs.check.outputs.tag }}
